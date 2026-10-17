@@ -1,0 +1,8 @@
+{
+  "name": "life-votes",
+  "version": "1.0.0",
+  "description": "Friends vote on each other's life decisions, live.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" }
+}

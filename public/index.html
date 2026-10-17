@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Life Votes</title>
+<style>
+  :root { --bg:#faf7f2; --card:#fff; --ink:#1d1b18; --muted:#78716c; --accent:#e85d3a; --bar:#fde2d8; --line:#e7e2da; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161412; --card:#211e1b; --ink:#f3efe9; --muted:#a8a29e; --accent:#ff7a54; --bar:#4a2a1f; --line:#36312c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.45 system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:640px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { margin:0 0 4px; font-size:28px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  input, textarea { width:100%; font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); margin-bottom:8px; }
+  button { font:inherit; border:0; border-radius:10px; padding:10px 14px; background:var(--accent); color:#fff; cursor:pointer; font-weight:600; }
+  button.ghost { background:none; color:var(--muted); padding:4px 8px; font-weight:400; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row input { margin:0; }
+  .q { font-size:18px; font-weight:650; margin:0 0 2px; }
+  .meta { color:var(--muted); font-size:13px; margin-bottom:10px; display:flex; justify-content:space-between; }
+  .opt { position:relative; display:block; width:100%; text-align:left; background:var(--bg); color:var(--ink); border:1px solid var(--line); margin-bottom:6px; overflow:hidden; font-weight:500; }
+  .opt .fill { position:absolute; inset:0 auto 0 0; background:var(--bar); transition:width .35s ease; z-index:0; }
+  .opt span { position:relative; z-index:1; }
+  .opt .count { float:right; color:var(--muted); }
+  .opt.mine { border-color:var(--accent); }
+  .voters { font-size:12px; color:var(--muted); margin:-2px 0 8px 4px; }
+  .hidden { display:none; }
+  .share { font-size:13px; color:var(--muted); word-break:break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🗳️ Life Votes</h1>
+  <p class="sub">Put your life decisions to a vote. Your friends decide. Live.</p>
+
+  <section id="join" class="card">
+    <input id="nameIn" placeholder="Your name" maxlength="30">
+    <input id="roomIn" placeholder="Room code (share it with friends)" maxlength="40">
+    <button id="joinBtn">Join room</button>
+  </section>
+
+  <section id="app" class="hidden">
+    <div class="card">
+      <div class="meta"><span>You're <b id="me"></b> in room <b id="roomName"></b></span><button class="ghost" id="leave">switch</button></div>
+      <div class="share">Invite link: <span id="link"></span></div>
+    </div>
+
+    <form id="newPoll" class="card">
+      <textarea id="qIn" rows="2" placeholder="What should I do about my life? e.g. Should I text my ex?" maxlength="200" required></textarea>
+      <div id="opts"></div>
+      <div class="row">
+        <button type="button" class="ghost" id="addOpt">+ option</button>
+        <span style="flex:1"></span>
+        <button type="submit">Ask the group</button>
+      </div>
+    </form>
+
+    <div id="polls"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+let name = '', room = '', es;
+
+function store(k, v) { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
+function load(k) { try { return localStorage.getItem(k) || ''; } catch { return ''; } }
+
+const params = new URLSearchParams(location.search);
+$('roomIn').value = params.get('room') || load('room');
+$('nameIn').value = load('name');
+
+function api(path, body) {
+  return fetch(`/api/${encodeURIComponent(room)}${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, ...body }),
+  }).then((r) => r.json()).then((j) => { if (j.error) alert(j.error); });
+}
+
+function join() {
+  name = $('nameIn').value.trim();
+  room = $('roomIn').value.trim().toLowerCase();
+  if (!name || !room) return alert('Enter a name and a room code');
+  store('name', name); store('room', room);
+  history.replaceState(null, '', `?room=${encodeURIComponent(room)}`);
+  $('me').textContent = name; $('roomName').textContent = room;
+  $('link').textContent = location.href;
+  $('join').classList.add('hidden'); $('app').classList.remove('hidden');
+  if (es) es.close();
+  es = new EventSource(`/api/${encodeURIComponent(room)}/stream`);
+  es.onmessage = (e) => render(JSON.parse(e.data));
+}
+
+function render({ polls }) {
+  $('polls').innerHTML = polls.length ? polls.map((p) => {
+    const total = p.options.reduce((n, o) => n + o.voters.length, 0);
+    return `<div class="card">
+      <p class="q">${esc(p.question)}</p>
+      <div class="meta"><span>asked by ${esc(p.author)} · ${total} vote${total === 1 ? '' : 's'}</span>
+        ${p.author === name ? `<button class="ghost" data-del="${p.id}">delete</button>` : ''}</div>
+      ${p.options.map((o, i) => {
+        const pct = total ? Math.round(o.voters.length / total * 100) : 0;
+        return `<button class="opt ${o.voters.includes(name) ? 'mine' : ''}" data-poll="${p.id}" data-opt="${i}">
+            <div class="fill" style="width:${pct}%"></div>
+            <span>${esc(o.text)}</span><span class="count">${o.voters.length} · ${pct}%</span>
+          </button>
+          ${o.voters.length ? `<div class="voters">${o.voters.map(esc).join(', ')}</div>` : ''}`;
+      }).join('')}
+    </div>`;
+  }).join('') : '<p class="sub">No decisions yet. Ask the group something.</p>';
+}
+
+$('polls').onclick = (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.del) { if (confirm('Delete this question?')) api(`/polls/${b.dataset.del}/delete`); }
+  else if (b.dataset.poll) api(`/polls/${b.dataset.poll}/vote`, { option: b.dataset.opt });
+};
+
+function addOpt(val = '') {
+  const i = document.createElement('input');
+  i.className = 'optIn'; i.placeholder = `Option ${$('opts').children.length + 1}`; i.maxLength = 80; i.value = val;
+  $('opts').appendChild(i);
+}
+function resetForm() { $('qIn').value = ''; $('opts').innerHTML = ''; addOpt('Yes'); addOpt('No'); }
+$('addOpt').onclick = () => $('opts').children.length < 6 && addOpt();
+$('newPoll').onsubmit = (e) => {
+  e.preventDefault();
+  const options = [...document.querySelectorAll('.optIn')].map((i) => i.value.trim()).filter(Boolean);
+  if (options.length < 2) return alert('Need at least 2 options');
+  api('/polls', { question: $('qIn').value, options }).then(resetForm);
+};
+
+$('joinBtn').onclick = join;
+$('roomIn').onkeydown = $('nameIn').onkeydown = (e) => e.key === 'Enter' && join();
+$('leave').onclick = () => { if (es) es.close(); $('app').classList.add('hidden'); $('join').classList.remove('hidden'); };
+resetForm();
+if ($('nameIn').value && $('roomIn').value) join();
+</script>
+</body>
+</html>
